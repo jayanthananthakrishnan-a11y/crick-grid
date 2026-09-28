@@ -1,30 +1,34 @@
 {
   "expo": {
-    "name": "Cricket Analyst",
+    "name": "Crick Grid",
     "slug": "cricket-analyst",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#1a472a"
+      "backgroundColor": "#092414"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.crickgrid.app"
     },
     "android": {
+      "package": "com.crickgrid.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#1a472a"
+        "backgroundColor": "#092414"
       }
     },
     "scheme": "cricket-analyst",
     "plugins": [
       "expo-router",
       "expo-video",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-sharing"
     ]
   }
 }

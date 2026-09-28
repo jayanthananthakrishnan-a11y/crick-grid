@@ -3,12 +3,12 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   Alert, ActivityIndicator, Dimensions
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import { useSession } from '../context/SessionContext';
-import { logBall, getBallsForSession, calculateScore } from '../services/api';
-import PitchMap from '../components/PitchMap';
-import SessionPicker from '../components/SessionPicker';
-import ShotDirection from '../components/ShotDirection';
+import { useFocusEffect } from 'expo-router';
+import { useSession } from '../../context/SessionContext';
+import { logBall, getBallsForSession, calculateScore } from '../../services/api';
+import PitchMap from '../../components/PitchMap';
+import SessionPicker from '../../components/SessionPicker';
+import ShotDirection from '../../components/ShotDirection';
 
 const SW = Dimensions.get('window').width;
 
@@ -17,7 +17,7 @@ const OPTIONS = {
   line: ['wide_outside_off', 'outside_off', 'straight', 'outside_leg', 'wide_outside_leg'],
   delivery: ['inswing', 'outswing', 'off_spin', 'leg_spin', 'straight', 'googly', 'bouncer'],
   contact: ['middle', 'edge', 'leading_edge', 'miss', 'pad'],
-  shot: ['drive', 'backfoot_drive', 'pull', 'backfoot_punch', 'cut', 'glance', 'sweep', 'defend', 'leave', 'lofted_drive', 'slog'],
+  shot: ['drive', 'backfoot_drive', 'pull', 'backfoot_punch', 'cut', 'glance', 'sweep', 'defend', 'leave', 'slog'],
 };
 
 const LABELS = {
@@ -29,7 +29,7 @@ const LABELS = {
   middle: 'Middled', edge: 'Edge', leading_edge: 'Leading Edge', miss: 'Missed', pad: 'Pad',
   drive: 'Drive', backfoot_drive: 'BF Drive', pull: 'Pull', backfoot_punch: 'BF Punch',
   cut: 'Cut', glance: 'Glance', sweep: 'Sweep', defend: 'Defend',
-  leave: 'Leave', lofted_drive: 'Lofted Drive', slog: 'Slog',
+  leave: 'Leave', slog: 'Slog',
 };
 
 function OptionGroup({ label, options, selected, onSelect }) {
@@ -61,6 +61,30 @@ function ToggleBtn({ label, value, onToggle, activeColor = '#c62828' }) {
     >
       <Text style={[styles.toggleBtnText, value && styles.toggleBtnTextActive]}>{label}</Text>
     </TouchableOpacity>
+  );
+}
+
+function WicketSideToggle({ value, onChange }) {
+  return (
+    <View style={styles.wicketSideRow}>
+      <Text style={styles.wicketSideLabel}>Bowling angle:</Text>
+      <View style={styles.wicketSideBtns}>
+        {[
+          { key: 'over', label: '↑ Over' },
+          { key: 'around', label: '↓ Around' },
+        ].map(opt => (
+          <TouchableOpacity
+            key={opt.key}
+            style={[styles.wicketBtn, value === opt.key && styles.wicketBtnActive]}
+            onPress={() => onChange(opt.key)}
+          >
+            <Text style={[styles.wicketBtnText, value === opt.key && styles.wicketBtnTextActive]}>
+              {opt.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
   );
 }
 
@@ -105,10 +129,19 @@ export default function LogBallScreen() {
   const [loadingSession, setLoadingSession] = useState(false);
 
   const [sel, setSel] = useState({
-    length_type: null, line_type: null, delivery_type: null,
-    contact_type: null, shot_type: null,
-    is_wide: false, is_no_ball: false,
-    is_lofted: false, batter_stepped_out: false, is_stumped: false,
+    length_type: null,
+    line_type: null,
+    delivery_type: null,
+    contact_type: null,
+    shot_type: null,
+    is_wide: false,
+    is_no_ball: false,
+    is_lofted: false,
+    batter_stepped_out: false,
+    is_stumped: false,
+    bowling_side: 'over',
+    caught_behind: false,      // Added by Claude's instruction
+    caught_and_bowled: false,  // Added by Claude's instruction
   });
 
   useFocusEffect(useCallback(() => {
@@ -136,7 +169,6 @@ export default function LogBallScreen() {
   const set = (key, val) => setSel(p => ({ ...p, [key]: val }));
   const toggle = (key) => setSel(p => ({ ...p, [key]: !p[key] }));
 
-  // Stumped auto-sets when batter stepped out + missed
   const handleSteppedOut = () => {
     setSel(p => ({
       ...p,
@@ -160,6 +192,27 @@ export default function LogBallScreen() {
 
   const handleLog = async () => {
     if (!activeSession) { Alert.alert('No Session', 'Select a session first'); return; }
+    
+    // Validate mandatory fields
+    // Validate mandatory fields (For wide balls, batter fields are not required)
+    const missing = [];
+    if (!sel.length_type) missing.push('Length');
+    if (!sel.line_type) missing.push('Line');
+    if (!sel.delivery_type) missing.push('Delivery Type');
+    if (!sel.is_wide) {
+      if (!sel.contact_type && !sel.caught_behind && !sel.caught_and_bowled) missing.push('Contact');
+      if (!sel.shot_type) missing.push('Shot Played');
+    }
+
+    if (missing.length > 0) {
+      Alert.alert(
+        '⚠️ Missing Details',
+        `Please select the following before logging:\n\n• ${missing.join('\n• ')}`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
     setLogging(true);
     try {
       const ballData = {
@@ -168,63 +221,72 @@ export default function LogBallScreen() {
         length_type: sel.length_type,
         line_type: sel.line_type,
         delivery_type: sel.delivery_type,
-        contact_type: sel.contact_type,
-        shot_type: sel.shot_type,
+        contact_type: sel.is_wide ? (sel.contact_type || null) : sel.contact_type,
+        shot_type: sel.is_wide ? (sel.shot_type || null) : sel.shot_type,
         is_wide: sel.is_wide,
         is_no_ball: sel.is_no_ball,
-        is_lofted: sel.is_lofted,
+        is_lofted: sel.is_wide ? false : sel.is_lofted,
         batter_stepped_out: sel.batter_stepped_out,
         is_stumped: sel.is_stumped,
+        bowling_side: sel.bowling_side,
         pitch_x: pitchTap?.x ?? null,
         pitch_y: pitchTap?.y ?? null,
-        contact_x: contactTap?.x ?? null,
-        contact_y: contactTap?.y ?? null,
+        contact_x: sel.is_wide ? null : (contactTap?.x ?? null),
+        contact_y: sel.is_wide ? null : (contactTap?.y ?? null),
       };
 
+      // Map caught_behind / caught_and_bowled into contact_type for storage
+      if (!sel.is_wide && sel.caught_behind)     ballData.contact_type = 'caught_behind';
+      if (!sel.is_wide && sel.caught_and_bowled) ballData.contact_type = 'caught_and_bowled';
+
       const logRes = await logBall(ballData);
-      const newBallId = logRes.data.data.id;
+      const newBallId = logRes?.data?.data?.id || Date.now();
 
       let scored = null;
-      if (contactTap || sel.is_stumped) {
+      try {
         const scoreRes = await calculateScore({
           session_id: activeSession.id,
           ball_id: newBallId,
           shotX: contactTap?.x ?? null,
           shotY: contactTap?.y ?? null,
-          contactType: sel.contact_type,
+          contactType: ballData.contact_type,
           isLofted: sel.is_lofted,
           batterSteppedOut: sel.batter_stepped_out,
           isStumped: sel.is_stumped,
+          manual_runs: sel.manual_runs,
+          is_boundary_hit: contactTap?.is_boundary_hit || false,
         });
-        scored = scoreRes.data.data;
-        setScoreResult(scored);
+        scored = scoreRes?.data?.data;
+        if (scored) setScoreResult(scored);
+      } catch (scoreErr) {
+        console.warn('Scoring calculate warning:', scoreErr);
       }
 
       setBallCount(c => c + 1);
-      setPreviousBalls(prev => [...prev, { ...ballData, id: newBallId }]);
+      setPreviousBalls(prev => [...prev, { ...ballData, id: newBallId, runs_scored: scored?.runs || 0 }]);
       refreshSessions();
 
-      // Reset per-ball (keep delivery settings)
       setSel(p => ({
         ...p,
         contact_type: null, shot_type: null,
         is_wide: false, is_no_ball: false,
         is_lofted: false, batter_stepped_out: false, is_stumped: false,
+        caught_behind: false, caught_and_bowled: false,
       }));
       setPitchTap(null);
       setContactTap(null);
       setShotArrow(null);
 
       if (!scored) Alert.alert('✅', `Ball ${ballCount + 1} logged!`);
-    } catch {
-      Alert.alert('Error', 'Failed to log ball');
+    } catch (e) {
+      console.error('Log ball error:', e);
+      Alert.alert('Error', e?.message || 'Failed to log ball');
     } finally {
       setLogging(false);
     }
   };
 
   const pitchW = SW - 48;
-  const shotW = SW - 48;
   const batterHandedness = activeSession?.batter_handedness || 'right';
   const bowlerHandedness = activeSession?.bowler_handedness || 'right';
 
@@ -243,26 +305,21 @@ export default function LogBallScreen() {
             <ActivityIndicator size="large" color="#1a472a" style={{ marginTop: 40 }} />
           ) : (
             <>
-              {/* Session banner - Updated with Over/Around Wicket indicator */}
               <View style={styles.sessionBanner}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.sessionBannerText}>
-                    🏏 {activeSession.bowler_name || '?'}
+                    | 🏏 {activeSession.bowler_name || '?'}
                     {bowlerHandedness === 'left' ? ' (Left arm)' : ' (Right arm)'}
-                    {'  →  '}
-                    🏏 {activeSession.batsman_name || '?'}
+                    {'   →   '}
+                    | 🏏 {activeSession.batsman_name || '?'}
                     {batterHandedness === 'left' ? ' (LH)' : ' (RH)'}
                   </Text>
-                  <Text style={styles.sessionBannerSub}>
-                    {activeSession.bowling_side === 'around' ? '↓ Around the wicket' : '↑ Over the wicket'}
-                  </Text>
-                </View>
+                </                View>
                 <View style={styles.ballBadge}>
                   <Text style={styles.ballBadgeText}>Ball {ballCount + 1}</Text>
                 </View>
               </View>
 
-              {/* ── PITCH MAP (full width) ── */}
               <View style={styles.fullCard}>
                 <Text style={styles.cardTitle}>🏏 Pitch Map</Text>
                 <Text style={styles.cardHint}>Tap where the ball lands on the pitch</Text>
@@ -289,10 +346,9 @@ export default function LogBallScreen() {
                 )}
               </View>
 
-              {/* ── SHOT DIRECTION (full width, below pitch map) ── */}
               <View style={styles.fullCard}>
                 <Text style={styles.cardTitle}>🏏 Shot Direction</Text>
-                <Text style={styles.cardHint}>Drag from the batter to show where the ball went</Text>
+                <Text style={styles.cardHint}>Drag from the batter outward to show where the ball went</Text>
                 <View style={{ alignItems: 'center' }}>
                   <ShotDirection
                     value={shotArrow}
@@ -310,21 +366,26 @@ export default function LogBallScreen() {
                 )}
               </View>
 
-              {/* ── DELIVERY ── */}
               <View style={styles.sectionCard}>
                 <Text style={styles.sectionTitle}>🏏 Delivery</Text>
+
+                <WicketSideToggle
+                  value={sel.bowling_side}
+                  onChange={v => set('bowling_side', v)}
+                />
+
                 <OptionGroup label="Length" options={OPTIONS.length} selected={sel.length_type} onSelect={v => set('length_type', v)} />
                 <OptionGroup label="Line" options={OPTIONS.line} selected={sel.line_type} onSelect={v => set('line_type', v)} />
                 <OptionGroup label="Delivery type" options={OPTIONS.delivery} selected={sel.delivery_type} onSelect={v => set('delivery_type', v)} />
               </View>
 
-              {/* ── BATSMAN ── */}
               <View style={styles.sectionCard}>
-                <Text style={styles.sectionTitle}>🏏 Batsman</Text>
+                <Text style={styles.sectionTitle}>
+                  🏏 Batsman {sel.is_wide ? <Text style={{ fontSize: 12, color: '#0277bd', fontWeight: 'normal' }}>(Optional for Wides)</Text> : ''}
+                </Text>
                 <OptionGroup label="Contact" options={OPTIONS.contact} selected={sel.contact_type} onSelect={handleContact} />
                 <OptionGroup label="Shot played" options={OPTIONS.shot} selected={sel.shot_type} onSelect={v => set('shot_type', v)} />
 
-                {/* Independent toggles */}
                 <Text style={styles.groupLabel}>Modifiers</Text>
                 <View style={styles.toggleRow}>
                   <ToggleBtn
@@ -343,8 +404,40 @@ export default function LogBallScreen() {
                     label={sel.is_stumped ? '🔴 Stumped' : 'Stumped'}
                     value={sel.is_stumped}
                     onToggle={() => toggle('is_stumped')}
-                    activeColor='#b71c1c'
+                    activeColor="#b71c1c"
                   />
+                </View>
+              </View>
+
+              {/* ── MANUAL RUN OVERRIDE ── */}
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>🏏 Manual Run Override (Optional)</Text>
+                <Text style={styles.cardHint}>Leave as "Auto" for fielding engine prediction or tap to force exact runs</Text>
+                <View style={styles.toggleRow}>
+                  {[
+                    { label: 'Auto (Engine)', value: null },
+                    { label: '0 Runs', value: '0' },
+                    { label: '1 Run', value: '1' },
+                    { label: '2 Runs', value: '2' },
+                    { label: '3 Runs', value: '3' },
+                    { label: '4 Runs', value: '4' },
+                    { label: '6 Runs', value: '6' },
+                  ].map(opt => (
+                    <TouchableOpacity
+                      key={opt.label}
+                      style={[
+                        styles.optBtn,
+                        sel.manual_runs === opt.value && styles.optBtnActive,
+                        opt.value === '4' && sel.manual_runs === '4' && { backgroundColor: '#c62828', borderColor: '#c62828' },
+                        opt.value === '6' && sel.manual_runs === '6' && { backgroundColor: '#6a1b9a', borderColor: '#6a1b9a' },
+                      ]}
+                      onPress={() => set('manual_runs', sel.manual_runs === opt.value ? null : opt.value)}
+                    >
+                      <Text style={[styles.optText, sel.manual_runs === opt.value && styles.optTextActive]}>
+                        {opt.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
                 </View>
               </View>
 
@@ -356,18 +449,45 @@ export default function LogBallScreen() {
                     label={sel.is_wide ? '⚠️ Wide' : 'Wide'}
                     value={sel.is_wide}
                     onToggle={() => toggle('is_wide')}
-                    activeColor='#0277bd'
+                    activeColor="#0277bd"
                   />
                   <ToggleBtn
                     label={sel.is_no_ball ? '🔴 No Ball' : 'No Ball'}
                     value={sel.is_no_ball}
                     onToggle={() => toggle('is_no_ball')}
-                    activeColor='#c62828'
+                    activeColor="#c62828"
                   />
                 </View>
               </View>
 
-              {/* ── LOG BUTTON ── */}
+              {/* ── OTHERS (dismissals in nets) ── */}
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>Others</Text>
+                <Text style={styles.groupLabel}>Dismissal type (nets)</Text>
+                <View style={styles.toggleRow}>
+                  <ToggleBtn
+                    label={sel.caught_behind ? '🧤 Caught Behind' : 'Caught Behind'}
+                    value={sel.caught_behind}
+                    onToggle={() => setSel(p => ({
+                      ...p,
+                      caught_behind: !p.caught_behind,
+                      caught_and_bowled: false,
+                    }))}
+                    activeColor="#1565c0"
+                  />
+                  <ToggleBtn
+                    label={sel.caught_and_bowled ? '🎳 C&B' : 'Caught & Bowled'}
+                    value={sel.caught_and_bowled}
+                    onToggle={() => setSel(p => ({
+                      ...p,
+                      caught_and_bowled: !p.caught_and_bowled,
+                      caught_behind: false,
+                    }))}
+                    activeColor="#6a1b9a"
+                  />
+                </View>
+              </View>
+
               <TouchableOpacity style={styles.logBtn} onPress={handleLog} disabled={logging}>
                 {logging
                   ? <ActivityIndicator color="#fff" />
@@ -392,7 +512,6 @@ const styles = StyleSheet.create({
   noSessionText: { fontSize: 16, color: '#888', textAlign: 'center' },
   sessionBanner: { backgroundColor: '#e8f5e9', borderRadius: 10, padding: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   sessionBannerText: { color: '#1a472a', fontSize: 12, flex: 1 },
-  sessionBannerSub: { color: '#555', fontSize: 11, marginTop: 2 }, // Added style for the new text
   ballBadge: { backgroundColor: '#1a472a', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 4, marginLeft: 8 },
   ballBadgeText: { color: '#f0c040', fontWeight: 'bold', fontSize: 14 },
   fullCard: { backgroundColor: '#fff', borderRadius: 14, padding: 14, marginBottom: 12, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
@@ -400,6 +519,13 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: 15, fontWeight: 'bold', color: '#1a472a', marginBottom: 4 },
   cardHint: { fontSize: 11, color: '#888', marginBottom: 10 },
   sectionTitle: { fontSize: 15, fontWeight: 'bold', color: '#1a472a', marginBottom: 10 },
+  wicketSideRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14, gap: 10 },
+  wicketSideLabel: { fontSize: 13, color: '#444', fontWeight: '600' },
+  wicketSideBtns: { flexDirection: 'row', gap: 8, flex: 1 },
+  wicketBtn: { flex: 1, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#ccc', backgroundColor: '#fafafa', alignItems: 'center' },
+  wicketBtnActive: { backgroundColor: '#1565c0', borderColor: '#1565c0' },
+  wicketBtnText: { fontSize: 13, color: '#555', fontWeight: '500' },
+  wicketBtnTextActive: { color: '#fff', fontWeight: 'bold' },
   tapConfirmRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, marginTop: 8 },
   tapConfirm: { fontSize: 12, color: '#1a472a', fontWeight: '600' },
   tapClear: { fontSize: 12, color: '#c62828', fontWeight: '600' },

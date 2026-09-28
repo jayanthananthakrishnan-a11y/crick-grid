@@ -4,12 +4,12 @@ const db = require('../db');
 
 // Full analytics for a session
 router.get('/session/:sessionId', async (req, res) => {
-  const { sessionId } = req.params;
+  const sessionId = parseInt(req.params.sessionId, 10);
 
   try {
     const [session, balls] = await Promise.all([
       db.query('SELECT * FROM sessions WHERE id=$1', [sessionId]),
-      db.query('SELECT * FROM balls WHERE session_id=$1 ORDER BY ball_number', [sessionId])
+      db.query('SELECT * FROM balls WHERE session_id=$1 ORDER BY ball_number ASC', [sessionId])
     ]);
 
     if (session.rows.length === 0) {
@@ -56,23 +56,39 @@ router.get('/session/:sessionId', async (req, res) => {
 
       // Pitch map
       if (b.pitch_x != null && b.pitch_y != null) {
-        pitchMap.push({ x: parseFloat(b.pitch_x), y: parseFloat(b.pitch_y), ball_number: b.ball_number });
+        pitchMap.push({
+          x: parseFloat(b.pitch_x),
+          y: parseFloat(b.pitch_y),
+          ball_number: b.ball_number,
+          length_type: b.length_type,
+        });
       }
 
-      // Contact type
-      if (b.contact_type) contactCounts[b.contact_type] = (contactCounts[b.contact_type] || 0) + 1;
-      // Shot type
-      if (b.shot_type) shotCounts[b.shot_type] = (shotCounts[b.shot_type] || 0) + 1;
+      // Contact type (Exclude wide balls)
+      if (!b.is_wide && b.contact_type) contactCounts[b.contact_type] = (contactCounts[b.contact_type] || 0) + 1;
+      // Shot type (Exclude wide balls)
+      if (!b.is_wide && b.shot_type) shotCounts[b.shot_type] = (shotCounts[b.shot_type] || 0) + 1;
 
-      // Contact map
-      if (b.contact_x != null && b.contact_y != null) {
-        contactMap.push({ x: parseFloat(b.contact_x), y: parseFloat(b.contact_y), ball_number: b.ball_number });
+      // Contact map (Exclude wide balls)
+      if (!b.is_wide && b.contact_x != null && b.contact_y != null) {
+        contactMap.push({
+          x: parseFloat(b.contact_x),
+          y: parseFloat(b.contact_y),
+          contact_x: parseFloat(b.contact_x),
+          contact_y: parseFloat(b.contact_y),
+          ball_number: b.ball_number,
+          runs: typeof b.runs_scored === 'number' ? b.runs_scored : 0,
+          contact_type: b.contact_type,
+          shot_type: b.shot_type,
+        });
       }
 
       // Extras
       if (b.is_wide) wides++;
       if (b.is_no_ball) noBalls++;
     });
+
+    const batterBalls = total - wides;
 
     res.json({
       success: true,
@@ -95,15 +111,15 @@ router.get('/session/:sessionId', async (req, res) => {
           contact_map: contactMap,
           wides,
           no_balls: noBalls,
-          middle_percentage: total > 0
-            ? ((contactCounts['middle'] || 0) / total * 100).toFixed(1)
-            : null,
-          edge_percentage: total > 0
-            ? ((contactCounts['edge'] || 0) / total * 100).toFixed(1)
-            : null,
-          miss_percentage: total > 0
-            ? ((contactCounts['miss'] || 0) / total * 100).toFixed(1)
-            : null,
+          middle_percentage: batterBalls > 0
+            ? ((contactCounts['middle'] || 0) / batterBalls * 100).toFixed(1)
+            : '0.0',
+          edge_percentage: batterBalls > 0
+            ? ((contactCounts['edge'] || 0) / batterBalls * 100).toFixed(1)
+            : '0.0',
+          miss_percentage: batterBalls > 0
+            ? ((contactCounts['miss'] || 0) / batterBalls * 100).toFixed(1)
+            : '0.0',
         }
       }
     });

@@ -1,16 +1,25 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, {
+  createContext, useContext, useState,
+  useEffect, useCallback, useRef
+} from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getSessions, getField } from '../services/api';
 
 const SessionContext = createContext(null);
+const ACTIVE_SESSION_KEY = '@crick_grid_active_session_id';
 
 export function SessionProvider({ children }) {
   const [sessions, setSessions] = useState([]);
-  const [activeSession, setActiveSessionState] = useState(null);
+  const [activeSession, setActiveSessionInternal] = useState(null);
   const [fieldPositions, setFieldPositions] = useState(null);
   const [fieldDiameter, setFieldDiameter] = useState(65);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [error, setError] = useState(null);
 
+  // Track which session's field is loaded so we don't over-fetch
+  const fieldSessionRef = useRef(null);
+
+  // ── Fetch all sessions ───────────────────────────────────────────────────
   const fetchSessions = useCallback(async () => {
     setLoadingSessions(true);
     setError(null);
@@ -18,63 +27,89 @@ export function SessionProvider({ children }) {
       const res = await getSessions();
       const data = res.data.data || [];
       setSessions(data);
-      setActiveSessionState(prev => {
-        if (prev) {
-          const refreshed = data.find(s => s.id === prev.id);
-          return refreshed || prev;
+
+      const savedId = await AsyncStorage.getItem(ACTIVE_SESSION_KEY);
+
+      setActiveSessionInternal(prev => {
+        const targetId = prev?.id || savedId;
+        if (targetId) {
+          const refreshed = data.find(s => String(s.id) === String(targetId));
+          if (refreshed) return refreshed;
         }
-        return data.length > 0 ? data[0] : null;
+        return prev || (data.length > 0 ? data[0] : null);
       });
-    } catch (e) {
-      setError('Could not connect to server. Check your IP in api.js and that the backend is running.');
+    } catch {
+      setError(
+        'Could not connect to server. Check your IP in api.js and that the backend is running.'
+      );
     } finally {
       setLoadingSessions(false);
     }
   }, []);
 
+  // ── Fetch field for a specific session ───────────────────────────────────
   const fetchField = useCallback(async (sessionId) => {
     if (!sessionId) {
       setFieldPositions(null);
       setFieldDiameter(65);
+      fieldSessionRef.current = null;
       return;
     }
     try {
-      // Always fetch fresh from backend for this specific session
       const res = await getField(sessionId);
-      if (res.data.data && res.data.data.session_id === sessionId) {
-        setFieldPositions(res.data.data.positions);
-        setFieldDiameter(res.data.data.field_diameter || 65);
+      const data = res.data.data;
+
+      // Strict ownership check — only apply if it belongs to THIS session
+      if (data && data.session_id === sessionId) {
+        setFieldPositions(data.positions);
+        setFieldDiameter(parseFloat(data.field_diameter) || 65);
       } else {
-        // No field set for this session yet
+        // No field saved for this session yet — use null (not stale data)
         setFieldPositions(null);
         setFieldDiameter(65);
       }
+      fieldSessionRef.current = sessionId;
     } catch {
       setFieldPositions(null);
       setFieldDiameter(65);
+      fieldSessionRef.current = sessionId;
     }
   }, []);
 
-  // When active session changes: CLEAR field first, then fetch this session's field
+  // Force-refresh field (ignores the "already loaded" cache)
+  const refreshField = useCallback(async (sessionId) => {
+    fieldSessionRef.current = null;
+    await fetchField(sessionId);
+  }, [fetchField]);
+
+  // ── When active session changes, hard-clear then reload field ────────────
   useEffect(() => {
     if (activeSession?.id) {
-      // Clear immediately so stale field from previous session isn't shown
+      // Immediately clear stale field from previous session
       setFieldPositions(null);
       setFieldDiameter(65);
+      fieldSessionRef.current = null;
+      // Then fetch this session's persisted field
       fetchField(activeSession.id);
     } else {
       setFieldPositions(null);
       setFieldDiameter(65);
+      fieldSessionRef.current = null;
     }
   }, [activeSession?.id]);
 
+  // Initial load
   useEffect(() => { fetchSessions(); }, []);
 
-  // Wrap setActiveSession to always clear field on switch
+  // ── setActiveSession — always clears field before switching ─────────────
   const setActiveSession = useCallback((session) => {
     setFieldPositions(null);
     setFieldDiameter(65);
-    setActiveSessionState(session);
+    fieldSessionRef.current = null;
+    if (session?.id) {
+      AsyncStorage.setItem(ACTIVE_SESSION_KEY, String(session.id)).catch(() => {});
+    }
+    setActiveSessionInternal(session);
   }, []);
 
   return (
@@ -84,7 +119,7 @@ export function SessionProvider({ children }) {
       setActiveSession,
       fieldPositions,
       fieldDiameter,
-      refreshField: fetchField,
+      refreshField,
       loadingSessions,
       error,
       refreshSessions: fetchSessions,

@@ -13,6 +13,7 @@ const scoringRouter = require('./routes/scoring');
 const videosRouter = require('./routes/videos');
 const clipsRouter = require('./routes/clips');
 const reviewsRouter = require('./routes/reviews');
+const matchesRouter = require('./routes/matches');
 
 const app = express();
 
@@ -30,6 +31,7 @@ app.use('/api/scoring', scoringRouter);
 app.use('/api/videos', videosRouter);
 app.use('/api/clips', clipsRouter);
 app.use('/api/reviews', reviewsRouter);
+app.use('/api/matches', matchesRouter);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 

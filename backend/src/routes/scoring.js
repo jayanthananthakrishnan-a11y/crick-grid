@@ -6,14 +6,12 @@ function dist(x1, y1, x2, y2) {
   return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
 }
 
-// Get angle in degrees from batter (50,85) to shot landing
 function getAngle(shotX, shotY) {
   const dx = shotX - 50;
   const dy = 85 - shotY;
   return Math.atan2(dx, dy) * (180 / Math.PI);
 }
 
-// Check if a fielder is within the cone of the shot direction
 function fielderInCone(fielderX, fielderY, shotAngle, coneWidth = 18) {
   const fAngle = getAngle(fielderX, fielderY);
   let diff = Math.abs(fAngle - shotAngle);
@@ -21,137 +19,180 @@ function fielderInCone(fielderX, fielderY, shotAngle, coneWidth = 18) {
   return diff < coneWidth;
 }
 
+const DEFAULT_FIELDERS = [
+  { id: '1', name: 'Wicket Keeper', x: 50, y: 94 },
+  { id: '2', name: 'Slip', x: 58, y: 90 },
+  { id: '3', name: 'Gully', x: 68, y: 82 },
+  { id: '4', name: 'Point', x: 80, y: 70 },
+  { id: '5', name: 'Cover', x: 78, y: 50 },
+  { id: '6', name: 'Mid Off', x: 60, y: 40 },
+  { id: '7', name: 'Mid On', x: 40, y: 40 },
+  { id: '8', name: 'Mid Wicket', x: 22, y: 52 },
+  { id: '9', name: 'Square Leg', x: 20, y: 70 },
+  { id: '10', name: 'Fine Leg', x: 32, y: 88 },
+  { id: '11', name: 'Third Man', x: 68, y: 88 },
+];
+
 function scoreBall({
   shotX, shotY, contactType, isLofted, batterSteppedOut,
-  isStumped, fielderPositions, fieldDiameter,
+  isStumped, fielderPositions, fieldDiameter, manualRuns, isBoundaryHit, isWide,
 }) {
-  const fd = fieldDiameter || 65;
+  if (isWide) {
+    const r = (manualRuns != null && !isNaN(manualRuns)) ? parseInt(manualRuns, 10) : 1;
+    return {
+      runs: r,
+      result: 'Wide',
+      wicket_type: null,
+      fielder_caught: null,
+      reason: `Wide ball — ${r} extra run${r !== 1 ? 's' : ''}`,
+    };
+  }
 
-  // Stumped
+  // Manual Run Override (if user selected explicit 0, 1, 2, 3, 4, 6)
+  if (manualRuns != null && !isNaN(manualRuns)) {
+    const r = parseInt(manualRuns, 10);
+    const resStr = r === 0 ? 'Dot' : String(r);
+    return {
+      runs: r,
+      result: resStr,
+      wicket_type: null,
+      fielder_caught: null,
+      reason: `Manual score override — ${r} run${r !== 1 ? 's' : ''}`,
+    };
+  }
+
+  const fielders = fielderPositions?.length ? fielderPositions : DEFAULT_FIELDERS;
+
+  // ── Stumped ──────────────────────────────────────────────────────────────
   if (isStumped) {
     return {
-      runs: 0,
-      result: 'Wicket',
-      wicket_type: 'Stumped',
-      fielder_caught: 'Keeper',
+      runs: 0, result: 'Wicket', wicket_type: 'Stumped',
+      fielder_caught: 'Wicket Keeper',
       reason: 'Stumped — batter stepped out and missed',
     };
   }
 
-  // No contact
+  // ── No contact / Miss ────────────────────────────────────────────────────
   if (!contactType || contactType === 'miss') {
     if (batterSteppedOut) {
       return {
-        runs: 0,
-        result: 'Wicket',
-        wicket_type: 'Stumped',
-        fielder_caught: 'Keeper',
-        reason: 'Stepped out, missed — stumped',
+        runs: 0, result: 'Wicket', wicket_type: 'Stumped',
+        fielder_caught: 'Wicket Keeper',
+        reason: 'Stepped out, missed — stumped by keeper',
       };
     }
     return { runs: 0, result: 'Dot', wicket_type: null, fielder_caught: null, reason: 'Dot ball — no contact' };
   }
 
-  // Pad — LBW possible but we score as dot
+  // ── Pad ──────────────────────────────────────────────────────────────────
   if (contactType === 'pad') {
-    return { runs: 0, result: 'Dot', wicket_type: null, fielder_caught: null, reason: 'Hit pad' };
+    return { runs: 0, result: 'Dot', wicket_type: null, fielder_caught: null, reason: 'Hit pad — dot ball' };
   }
 
-  // Edge
+  // ── Explicit Catch Behind / Catch & Bowled ────────────────────────────────
+  if (contactType === 'caught_behind') {
+    return {
+      runs: 0, result: 'Wicket', wicket_type: 'Caught Behind',
+      fielder_caught: 'Wicket Keeper',
+      reason: 'Edged behind — caught by Wicket Keeper',
+    };
+  }
+  if (contactType === 'caught_and_bowled') {
+    return {
+      runs: 0, result: 'Wicket', wicket_type: 'Caught & Bowled',
+      fielder_caught: 'Bowler',
+      reason: 'Popped up back to bowler — caught & bowled',
+    };
+  }
+
+  // If no direction logged
+  if (shotX == null || shotY == null) {
+    if (contactType === 'edge' || contactType === 'leading_edge') {
+      return { runs: 4, result: '4', wicket_type: null, fielder_caught: null, reason: 'Edge flies away for four' };
+    }
+    return { runs: 1, result: '1', wicket_type: null, fielder_caught: null, reason: 'Contact made — 1 run' };
+  }
+
+  // Vector & Boundary Check
+  const shotFromCenter = dist(shotX, shotY, 50, 50);
+  const shotAngle = getAngle(shotX, shotY);
+  const isAtBoundary = isBoundaryHit || shotFromCenter >= 40;
+
+  // Find nearest fielder
+  let minFielderDist = 999;
+  let closestFielder = null;
+  let fielderInPath = null;
+
+  for (const f of fielders) {
+    const d = dist(shotX, shotY, f.x, f.y);
+    if (d < minFielderDist) {
+      minFielderDist = d;
+      closestFielder = f;
+    }
+    if (fielderInCone(f.x, f.y, shotAngle, 16)) {
+      if (!fielderInPath || dist(f.x, f.y, 50, 85) < dist(fielderInPath.x, fielderInPath.y, 50, 85)) {
+        fielderInPath = f;
+      }
+    }
+  }
+
+  // ── Edge / Leading Edge Calculation ──────────────────────────────────────
   if (contactType === 'edge' || contactType === 'leading_edge') {
-    const keeperPos = fielderPositions?.find(f => f.name === 'Keeper');
-    const slipPos = fielderPositions?.find(f => f.name === 'Slip');
-    const fielder = contactType === 'leading_edge'
-      ? (fielderPositions?.find(f => ['Cover', 'Mid-off', 'Point'].includes(f.name)))
-      : (keeperPos || slipPos);
-    if (fielder) {
+    if (closestFielder && minFielderDist <= 14) {
       return {
-        runs: 0,
-        result: 'Wicket',
-        wicket_type: contactType === 'leading_edge' ? 'Caught' : 'Caught behind',
-        fielder_caught: fielder.name,
-        reason: `${contactType === 'leading_edge' ? 'Leading edge' : 'Edge'} — caught by ${fielder.name}`,
+        runs: 0, result: 'Wicket', wicket_type: 'Caught',
+        fielder_caught: closestFielder.name,
+        reason: `${contactType === 'leading_edge' ? 'Leading edge' : 'Edge'} — caught by ${closestFielder.name}`,
       };
     }
-    return { runs: 4, result: '4', wicket_type: null, fielder_caught: null, reason: 'Edge races to boundary' };
-  }
-
-  if (shotX == null || shotY == null) {
-    return { runs: 1, result: '1', wicket_type: null, fielder_caught: null, reason: 'Contact but no direction' };
-  }
-
-  const shotAngle = getAngle(shotX, shotY);
-  const fromCentre = dist(shotX, shotY, 50, 50);
-
-  // Check fielders in shot path
-  let fielderInPath = null;
-  for (const f of (fielderPositions || [])) {
-    if (fielderInCone(f.x, f.y, shotAngle, 16)) {
-      fielderInPath = f;
-      break;
+    if (isAtBoundary) {
+      return { runs: 4, result: '4', wicket_type: null, fielder_caught: null, reason: 'Edge races to boundary — FOUR!' };
     }
+    return { runs: 2, result: '2', wicket_type: null, fielder_caught: null, reason: 'Edge into the gap — 2 runs' };
   }
 
-  // LOFTED BALL LOGIC
+  // ── Lofted Shot Rules ───────────────────────────────────────────────────
   if (isLofted) {
-    // Check if ball carries to boundary height
-    const carriesBoundary = fromCentre > 38;
-
-    if (fielderInPath) {
-      // Fielder in path — catch attempt
-      // If fielder is inside circle (< 30 units from centre) and ball is lofted high = catch
-      const fielderDist = dist(fielderInPath.x, fielderInPath.y, 50, 50);
-      if (fielderDist < 30 && fromCentre > 25) {
-        // Fielder inside circle — only catches if ball is hit hard enough to reach them
-        return {
-          runs: 0,
-          result: 'Wicket',
-          wicket_type: 'Caught',
-          fielder_caught: fielderInPath.name,
-          reason: `Lofted — caught by ${fielderInPath.name}`,
-        };
-      }
-      if (fielderDist >= 30) {
-        // Outfield catch
-        return {
-          runs: 0,
-          result: 'Wicket',
-          wicket_type: 'Caught',
-          fielder_caught: fielderInPath.name,
-          reason: `Lofted to outfield — caught by ${fielderInPath.name}`,
-        };
-      }
+    // Catch check (reaction radius <= 12 units)
+    if (closestFielder && minFielderDist <= 12) {
+      return {
+        runs: 0, result: 'Wicket', wicket_type: 'Caught',
+        fielder_caught: closestFielder.name,
+        reason: `Lofted shot in fielder's reach — caught by ${closestFielder.name}!`,
+      };
     }
 
-    // No fielder in path
-    if (carriesBoundary) {
-      return { runs: 6, result: '6', wicket_type: null, fielder_caught: null, reason: 'Lofted over boundary — six!' };
+    // A lofted shot to/over the boundary is ONLY a 6!
+    if (isAtBoundary) {
+      return { runs: 6, result: '6', wicket_type: null, fielder_caught: null, reason: 'Lofted arrow reached boundary line — SIX!' };
     }
-    if (fromCentre > 28) {
-      return { runs: 4, result: '4', wicket_type: null, fielder_caught: null, reason: 'Lofted, lands in gap — four!' };
-    }
-    return { runs: 2, result: '2', wicket_type: null, fielder_caught: null, reason: 'Lofted into gap — 2 runs' };
+
+    // Inside boundary: max 3, 2, 1 runs
+    if (minFielderDist > 26) return { runs: 3, result: '3', wicket_type: null, fielder_caught: null, reason: 'Lofted into deep gap — 3 runs' };
+    if (minFielderDist > 18) return { runs: 2, result: '2', wicket_type: null, fielder_caught: null, reason: 'Lofted into gap — 2 runs' };
+    return { runs: 1, result: '1', wicket_type: null, fielder_caught: null, reason: 'Lofted into field — 1 run' };
   }
 
-  // GROUND SHOT LOGIC
-  if (fromCentre > 44) {
-    return { runs: 4, result: '4', wicket_type: null, fielder_caught: null, reason: 'Races to boundary!' };
+  // ── Ground Shot Rules ───────────────────────────────────────────────────
+  // A ground shot to/beyond boundary is ONLY a 4!
+  if (isAtBoundary) {
+    return { runs: 4, result: '4', wicket_type: null, fielder_caught: null, reason: 'Ground shot arrow reached boundary line — FOUR!' };
   }
 
+  // Intercepted by fielder
   if (fielderInPath) {
-    const fielderDist = dist(fielderInPath.x, fielderInPath.y, 50, 50);
-    const distMetres = (fromCentre / 50) * (fd / 2);
-    if (fielderDist < 28) {
-      return { runs: 0, result: 'Dot', wicket_type: null, fielder_caught: null, reason: `Fielded by ${fielderInPath.name}` };
+    const fDistFromBatter = dist(fielderInPath.x, fielderInPath.y, 50, 85);
+    if (fDistFromBatter < 35 && minFielderDist <= 15) {
+      return { runs: 0, result: 'Dot', wicket_type: null, fielder_caught: null, reason: `Driven straight to ${fielderInPath.name} — dot ball` };
     }
-    return { runs: 1, result: '1', wicket_type: null, fielder_caught: null, reason: `Cut off by ${fielderInPath.name}` };
+    if (minFielderDist <= 15) {
+      return { runs: 1, result: '1', wicket_type: null, fielder_caught: null, reason: `Cut off by ${fielderInPath.name} — 1 run` };
+    }
   }
 
-  // Gap
-  const distMetres = (fromCentre / 50) * (fd / 2);
-  if (distMetres > 30) return { runs: 4, result: '4', wicket_type: null, fielder_caught: null, reason: 'Through the gap — four!' };
-  if (distMetres > 22) return { runs: 3, result: '3', wicket_type: null, fielder_caught: null, reason: 'Good running — 3' };
-  if (distMetres > 14) return { runs: 2, result: '2', wicket_type: null, fielder_caught: null, reason: 'Into the gap — 2' };
+  // Ground shot inside boundary
+  if (minFielderDist > 24) return { runs: 3, result: '3', wicket_type: null, fielder_caught: null, reason: 'Placed into deep space — 3 runs' };
+  if (minFielderDist > 14) return { runs: 2, result: '2', wicket_type: null, fielder_caught: null, reason: 'Pushed into gap — 2 runs' };
   return { runs: 1, result: '1', wicket_type: null, fielder_caught: null, reason: 'Fielded — 1 run' };
 }
 
@@ -160,20 +201,29 @@ router.post('/calculate', async (req, res) => {
   try {
     const {
       session_id, ball_id, shotX, shotY, contactType,
-      isLofted, batterSteppedOut, isStumped,
+      isLofted, batterSteppedOut, isStumped, manual_runs, is_boundary_hit,
     } = req.body;
 
     const fieldResult = await db.query(
       'SELECT * FROM field_settings WHERE session_id=$1 ORDER BY created_at DESC LIMIT 1',
-      [session_id]
+      [parseInt(session_id, 10)]
     );
     const field = fieldResult.rows[0];
-    const positions = field?.positions || [];
+    
+    let positions = field?.positions || [];
+    if (typeof positions === 'string') {
+      try { positions = JSON.parse(positions); } catch { positions = []; }
+    }
     const fieldDiameter = field?.field_diameter || 65;
 
     const result = scoreBall({
-      shotX, shotY, contactType, isLofted, batterSteppedOut,
-      isStumped, fielderPositions: positions, fieldDiameter,
+      shotX: shotX != null ? parseFloat(shotX) : null,
+      shotY: shotY != null ? parseFloat(shotY) : null,
+      contactType, isLofted, batterSteppedOut, isStumped,
+      fielderPositions: positions, fieldDiameter,
+      manualRuns: manual_runs != null ? parseInt(manual_runs, 10) : null,
+      isBoundaryHit: !!is_boundary_hit,
+      isWide: !!(req.body.isWide || req.body.is_wide),
     });
 
     if (ball_id) {
@@ -184,7 +234,9 @@ router.post('/calculate', async (req, res) => {
           batter_stepped_out=$7, is_stumped=$8
          WHERE id=$9`,
         [
-          shotX, shotY, isLofted || false,
+          shotX != null ? parseFloat(shotX) : null,
+          shotY != null ? parseFloat(shotY) : null,
+          isLofted || false,
           result.wicket_type, result.fielder_caught, result.runs,
           batterSteppedOut || false, isStumped || false,
           ball_id,
@@ -201,13 +253,17 @@ router.post('/calculate', async (req, res) => {
 // GET /api/scoring/session/:sessionId
 router.get('/session/:sessionId', async (req, res) => {
   try {
+    const sessionId = parseInt(req.params.sessionId, 10);
     const [ballsResult, fieldResult] = await Promise.all([
-      db.query('SELECT * FROM balls WHERE session_id=$1 ORDER BY ball_number', [req.params.sessionId]),
-      db.query('SELECT * FROM field_settings WHERE session_id=$1 ORDER BY created_at DESC LIMIT 1', [req.params.sessionId]),
+      db.query('SELECT * FROM balls WHERE session_id=$1 ORDER BY ball_number ASC', [sessionId]),
+      db.query('SELECT * FROM field_settings WHERE session_id=$1 ORDER BY created_at DESC LIMIT 1', [sessionId]),
     ]);
 
     const field = fieldResult.rows[0];
-    const positions = field?.positions || [];
+    let positions = field?.positions || [];
+    if (typeof positions === 'string') {
+      try { positions = JSON.parse(positions); } catch { positions = []; }
+    }
     const fieldDiameter = field?.field_diameter || 65;
 
     let totalRuns = 0;
@@ -215,29 +271,43 @@ router.get('/session/:sessionId', async (req, res) => {
 
     for (const ball of ballsResult.rows) {
       const scored = scoreBall({
-        shotX: ball.contact_x ? parseFloat(ball.contact_x) : null,
-        shotY: ball.contact_y ? parseFloat(ball.contact_y) : null,
+        shotX: ball.contact_x != null ? parseFloat(ball.contact_x) : null,
+        shotY: ball.contact_y != null ? parseFloat(ball.contact_y) : null,
         contactType: ball.contact_type,
         isLofted: ball.is_lofted,
         batterSteppedOut: ball.batter_stepped_out,
         isStumped: ball.is_stumped,
         fielderPositions: positions,
         fieldDiameter,
+        manualRuns: typeof ball.runs_scored === 'number' ? ball.runs_scored : null,
+        isWide: !!ball.is_wide,
       });
-      totalRuns += scored.runs;
+
+      const runs = typeof ball.runs_scored === 'number' ? ball.runs_scored : scored.runs;
+      totalRuns += runs;
+
       ballScores.push({
+        id: ball.id,
         ball_number: ball.ball_number,
         length_type: ball.length_type,
         line_type: ball.line_type,
         delivery_type: ball.delivery_type,
         shot_type: ball.shot_type,
         contact_type: ball.contact_type,
+        contact_x: ball.contact_x != null ? parseFloat(ball.contact_x) : null,
+        contact_y: ball.contact_y != null ? parseFloat(ball.contact_y) : null,
+        pitch_x: ball.pitch_x != null ? parseFloat(ball.pitch_x) : null,
+        pitch_y: ball.pitch_y != null ? parseFloat(ball.pitch_y) : null,
         is_lofted: ball.is_lofted,
         is_wide: ball.is_wide,
         is_no_ball: ball.is_no_ball,
         batter_stepped_out: ball.batter_stepped_out,
         is_stumped: ball.is_stumped,
-        ...scored,
+        runs: runs,
+        result: ball.wicket_type ? 'Wicket' : String(runs),
+        wicket_type: ball.wicket_type || scored.wicket_type,
+        fielder_caught: ball.fielder_caught || scored.fielder_caught,
+        reason: scored.reason,
       });
     }
 

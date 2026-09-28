@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, ActivityIndicator,
   TouchableOpacity, Dimensions
 } from 'react-native';
-import { useSession } from '../context/SessionContext';
-import { getSessionScoring } from '../services/api';
+import { useFocusEffect } from 'expo-router';
+import { useSession } from '../../context/SessionContext';
+import { getSessionScoring } from '../../services/api';
 
 const W = Dimensions.get('window').width;
 
@@ -71,7 +72,6 @@ function formatResult(ball) {
   return `${ball.runs} run${ball.runs !== 1 ? 's' : ''} — ${ball.reason || ''}`;
 }
 
-// Mini scorecard strip at top
 function ScorecardStrip({ balls }) {
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.strip} contentContainerStyle={styles.stripContent}>
@@ -90,6 +90,10 @@ export default function BallTrackerScreen() {
   const [scoring, setScoring] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expandedBall, setExpandedBall] = useState(null);
+
+  useFocusEffect(useCallback(() => {
+    if (activeSession?.id) load();
+  }, [activeSession?.id]));
 
   useEffect(() => {
     if (!activeSession) return;
@@ -126,13 +130,11 @@ export default function BallTrackerScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }}>
-      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Ball-by-Ball Tracker</Text>
         <Text style={styles.headerSub}>{activeSession.session_name}</Text>
       </View>
 
-      {/* Summary row */}
       <View style={styles.summaryRow}>
         {[
           { label: 'Runs', value: scoring?.total_runs ?? 0, color: '#f0c040' },
@@ -149,10 +151,8 @@ export default function BallTrackerScreen() {
         ))}
       </View>
 
-      {/* Strip */}
       <ScorecardStrip balls={balls} />
 
-      {/* Table header */}
       <View style={styles.tableHeader}>
         <Text style={[styles.tableHeaderCell, { width: 36 }]}>Ball</Text>
         <Text style={[styles.tableHeaderCell, { flex: 1.4 }]}>Delivery</Text>
@@ -161,7 +161,6 @@ export default function BallTrackerScreen() {
         <Text style={[styles.tableHeaderCell, { width: 40 }]}>Runs</Text>
       </View>
 
-      {/* Ball rows */}
       {balls.map((ball, i) => {
         const isExpanded = expandedBall === i;
         const isWicket = !!ball.wicket_type;
@@ -173,7 +172,6 @@ export default function BallTrackerScreen() {
             activeOpacity={0.75}
           >
             <View style={styles.ballRowMain}>
-              {/* Ball number */}
               <View style={[styles.ballNumCell, { width: 36 }]}>
                 <Text style={styles.ballNum}>{ball.ball_number}</Text>
                 {(ball.is_wide || ball.is_no_ball) && (
@@ -181,34 +179,29 @@ export default function BallTrackerScreen() {
                 )}
               </View>
 
-              {/* Delivery */}
               <View style={{ flex: 1.4 }}>
                 <Text style={styles.deliveryText} numberOfLines={2}>
                   {formatDelivery(ball)}
                 </Text>
               </View>
 
-              {/* Shot */}
               <View style={{ flex: 1 }}>
                 <Text style={styles.shotText} numberOfLines={2}>
                   {formatShot(ball)}
                 </Text>
               </View>
 
-              {/* Result */}
               <View style={{ flex: 1.6 }}>
                 <Text style={[styles.resultText, isWicket && styles.resultTextWicket]} numberOfLines={2}>
                   {formatResult(ball)}
                 </Text>
               </View>
 
-              {/* Runs badge */}
               <View style={{ width: 40, alignItems: 'center' }}>
                 <ResultBadge ball={ball} />
               </View>
             </View>
 
-            {/* Expanded detail */}
             {isExpanded && (
               <View style={styles.expandedRow}>
                 {ball.contact_type && (
@@ -238,7 +231,6 @@ export default function BallTrackerScreen() {
         </View>
       )}
 
-      {/* Wickets summary */}
       {wickets.length > 0 && (
         <View style={styles.wicketsSummary}>
           <Text style={styles.wicketsSummaryTitle}>⚡ Wickets</Text>

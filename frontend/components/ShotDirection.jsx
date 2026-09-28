@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
-import Svg, { Circle, Line, Polygon, Text as SvgText, G, Ellipse, Rect } from 'react-native-svg';
+import Svg, { Circle, Line, Polygon, Text as SvgText, G, Rect } from 'react-native-svg';
 
 const SIZE = Math.min(Dimensions.get('window').width - 64, 300);
 const CX = SIZE / 2;
@@ -29,7 +29,6 @@ function getZoneLabel(angle) {
 }
 
 function getAngle(x, y) {
-  // angle from top (straight), clockwise = leg side for RHB
   return Math.atan2(x - CX, CY - y) * (180 / Math.PI);
 }
 
@@ -40,33 +39,42 @@ function arrowHead(x1, y1, x2, y2, size = 10) {
   return `${x2},${y2} ${x2 + size * Math.cos(a1)},${y2 + size * Math.sin(a1)} ${x2 + size * Math.cos(a2)},${y2 + size * Math.sin(a2)}`;
 }
 
+// ── FIXED COORDINATE ORIENTATION ENGINE ──
 // Convert arrow endpoint to contact_x, contact_y (0-100 field %)
-function arrowToContact(endX, endY, handedness) {
-  let x = ((endX - CX) / OUTER_R) * 50 + 50;
-  let y = ((endY - CY) / OUTER_R) * 50 + 50;
-  if (handedness === 'left') x = 100 - x;
+// Matches FieldMap coordinate system: batter at (50, 85), straight = y decreasing
+function arrowToContact(endX, endY, distFromCenter, handedness) {
+  const normX = (endX - CX) / OUTER_R;  // -1 to 1 range
+  const normY = (endY - CY) / OUTER_R;  // -1 to 1 range
+
+  let fieldX = 50 + normX * 50;
+  let fieldY = 50 + normY * 50;
+
+  if (handedness === 'left') fieldX = 100 - fieldX;
+
+  const isBoundaryHit = distFromCenter >= 0.88 * OUTER_R;
+
   return {
-    x: Math.max(0, Math.min(100, parseFloat(x.toFixed(1)))),
-    y: Math.max(0, Math.min(100, parseFloat(y.toFixed(1)))),
+    x: Math.max(0, Math.min(100, parseFloat(fieldX.toFixed(2)))),
+    y: Math.max(0, Math.min(100, parseFloat(fieldY.toFixed(2)))),
+    is_boundary_hit: isBoundaryHit,
   };
 }
 
 export default function ShotDirection({ value, onChange, handedness = 'right' }) {
-  const [arrow, setArrow] = useState(value || null); // {endX, endY}
+  const [arrow, setArrow] = useState(value || null); 
   const [dragging, setDragging] = useState(false);
-  const svgRef = useRef(null);
 
   const updateArrow = (locationX, locationY) => {
     const dx = locationX - CX;
     const dy = locationY - CY;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    // Clamp to outer radius
     const clamped = dist > OUTER_R ? OUTER_R / dist : 1;
     const endX = CX + dx * clamped;
     const endY = CY + dy * clamped;
     const newArrow = { endX, endY };
+    
     setArrow(newArrow);
-    const contact = arrowToContact(endX, endY, handedness);
+    const contact = arrowToContact(endX, endY, Math.min(dist, OUTER_R), handedness);
     onChange?.(contact, newArrow);
   };
 
@@ -88,7 +96,6 @@ export default function ShotDirection({ value, onChange, handedness = 'right' })
   };
 
   const zoneLabel = arrow ? getZoneLabel(getAngle(arrow.endX, arrow.endY)) : null;
-  // Flip zone labels for LHB
   const displayZone = arrow
     ? (handedness === 'left' && zoneLabel
         ? zoneLabel.replace('Leg', '__LEG__').replace('Off', '__OFF__')
@@ -105,7 +112,7 @@ export default function ShotDirection({ value, onChange, handedness = 'right' })
   const compassLabels = handedness === 'right'
     ? [
         { label: 'Straight', x: CX, y: 10, anchor: 'middle' },
-        { label: 'Leg', x: 10, y: CY + 4, anchor: 'start' },
+        { lable: 'Leg', x: 10, y: CY + 4, anchor: 'start' },
         { label: 'Off', x: SIZE - 10, y: CY + 4, anchor: 'end' },
         { label: 'Fine leg/3rd man', x: CX, y: SIZE - 4, anchor: 'middle' },
       ]
@@ -127,61 +134,47 @@ export default function ShotDirection({ value, onChange, handedness = 'right' })
         onResponderRelease={handleEnd}
       >
         <Svg width={SIZE} height={SIZE}>
-          {/* Outfield */}
-          <Ellipse cx={CX} cy={CY} rx={OUTER_R} ry={OUTER_R * 0.93} fill="#3a7d2c" stroke="#2d6a22" strokeWidth={1.5} />
-          {/* Inner circle */}
-          <Ellipse cx={CX} cy={CY} rx={INNER_R} ry={INNER_R * 0.93} fill="#4a8f3a" stroke="#6dbf5e" strokeWidth={0.8} strokeDasharray="5,4" />
+          <Circle cx={CX} cy={CY} r={OUTER_R} fill="#3a7d2c" stroke="#2d6a22" strokeWidth={1.5} />
+          <Circle cx={CX} cy={CY} r={INNER_R} fill="#4a8f3a" stroke="#6dbf5e" strokeWidth={0.8} strokeDasharray="5,4" />
 
-          {/* Compass labels */}
           {compassLabels.map((l, i) => (
             <SvgText key={i} x={l.x} y={l.y} fontSize={9} fill="#c8e6c9" textAnchor={l.anchor}>{l.label}</SvgText>
           ))}
 
-          {/* Pitch strip */}
           <Rect x={CX - 7} y={CY - 22} width={14} height={44} fill="#d4b483" stroke="#8a6d3b" strokeWidth={1} rx={2} />
-
-          {/* Batter */}
           <BatterSilhouette cx={CX} cy={CY + 10} size={18} handedness={handedness} />
 
-          {/* Hint ring when no arrow */}
           {!arrow && (
             <G>
-              <Ellipse cx={CX} cy={CY} rx={INNER_R * 0.5} ry={INNER_R * 0.5}
-                fill="none" stroke="#f0c04055" strokeWidth={1.5} strokeDasharray="4,3" />
+              <Circle cx={CX} cy={CY} r={INNER_R * 0.5} fill="none" stroke="#f0c04055" strokeWidth={1.5} strokeDasharray="4,3" />
               <SvgText x={CX} y={CY - INNER_R * 0.65} fontSize={9} fill="#f0c040aa" textAnchor="middle">
                 Drag to aim
               </SvgText>
             </G>
           )}
 
-          {/* Arrow */}
           {arrow && (
             <G>
-              {/* Shadow */}
               <Line
                 x1={CX} y1={CY + 10}
                 x2={arrow.endX + 1} y2={arrow.endY + 1}
                 stroke="rgba(0,0,0,0.3)" strokeWidth={4} strokeLinecap="round"
               />
-              {/* Arrow line */}
               <Line
                 x1={CX} y1={CY + 10}
                 x2={arrow.endX} y2={arrow.endY}
                 stroke="#f0c040" strokeWidth={3.5} strokeLinecap="round"
               />
-              {/* Arrowhead */}
               <Polygon
                 points={arrowHead(CX, CY + 10, arrow.endX, arrow.endY, 10)}
                 fill="#f0c040"
               />
-              {/* Landing dot */}
               <Circle cx={arrow.endX} cy={arrow.endY} r={6} fill="#f0c040" opacity={0.9} stroke="#fff" strokeWidth={1.5} />
             </G>
           )}
         </Svg>
       </View>
 
-      {/* Zone label + clear */}
       <View style={styles.footer}>
         {displayZone ? (
           <View style={styles.zonePill}>

@@ -21,8 +21,11 @@ router.post('/', async (req, res) => {
     session_id, ball_number, length_type, line_type, delivery_type,
     swing_degree, turn_degree, pitch_x, pitch_y,
     shot_type, contact_type, contact_x, contact_y,
-    is_wide, is_no_ball
+    is_wide, is_no_ball, runs_scored, run_outcome, is_lofted,
+    is_wicket, wicket_type, fielder_caught, batter_stepped_out, is_stumped
   } = req.body;
+
+  const finalRuns = typeof runs_scored === 'number' ? runs_scored : (typeof run_outcome === 'number' ? run_outcome : 0);
 
   try {
     const result = await db.query(
@@ -30,14 +33,17 @@ router.post('/', async (req, res) => {
         session_id, ball_number, length_type, line_type, delivery_type,
         swing_degree, turn_degree, pitch_x, pitch_y,
         shot_type, contact_type, contact_x, contact_y,
-        is_wide, is_no_ball
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        is_wide, is_no_ball, runs_scored, is_lofted,
+        is_wicket, wicket_type, fielder_caught, batter_stepped_out, is_stumped
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
       RETURNING *`,
       [
         session_id, ball_number, length_type, line_type, delivery_type,
         swing_degree, turn_degree, pitch_x, pitch_y,
         shot_type, contact_type, contact_x, contact_y,
-        is_wide || false, is_no_ball || false
+        is_wide || false, is_no_ball || false, finalRuns,
+        is_lofted || false, is_wicket || false, wicket_type || null,
+        fielder_caught || null, batter_stepped_out || false, is_stumped || false
       ]
     );
 

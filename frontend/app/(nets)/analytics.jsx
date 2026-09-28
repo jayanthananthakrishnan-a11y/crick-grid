@@ -3,13 +3,13 @@ import {
   View, Text, ScrollView, StyleSheet,
   ActivityIndicator, Alert, Dimensions, RefreshControl, TouchableOpacity
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import { useRouter } from 'expo-router'; // Added per instructions
-import { useSession } from '../context/SessionContext';
-import { getAnalytics, getSessionScoring } from '../services/api';
-import WagonWheel from '../components/WagonWheel';
-import PitchMap from '../components/PitchMap';
-import SessionPicker from '../components/SessionPicker';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { useSession } from '../../context/SessionContext';
+import { getAnalytics, getSessionScoring } from '../../services/api';
+import { generateNetsPDF } from '../../services/pdfReportGenerator';
+import WagonWheel from '../../components/WagonWheel';
+import PitchMap from '../../components/PitchMap';
+import SessionPicker from '../../components/SessionPicker';
 
 const W = Dimensions.get('window').width - 32;
 
@@ -27,7 +27,7 @@ function StatBar({ label, value, total, color }) {
 }
 
 export default function AnalyticsScreen() {
-  const router = useRouter(); // Added per instructions
+  const router = useRouter();
   const { activeSession } = useSession();
   const [analytics, setAnalytics] = useState(null);
   const [scoring, setScoring] = useState(null);
@@ -52,12 +52,10 @@ export default function AnalyticsScreen() {
     }
   }, []);
 
-  // Auto-refresh every time this tab comes into focus
   useFocusEffect(useCallback(() => {
     if (activeSession?.id) loadAnalytics(activeSession.id, true);
   }, [activeSession?.id, loadAnalytics]));
 
-  // Also reload when session changes
   useEffect(() => {
     if (!activeSession) { setAnalytics(null); setScoring(null); return; }
     loadAnalytics(activeSession.id);
@@ -73,11 +71,11 @@ export default function AnalyticsScreen() {
   const batterHandedness = analytics?.session?.batter_handedness || 'right';
   const bowlerHandedness = analytics?.session?.bowler_handedness || 'right';
 
-  const wagonShots = scoring?.ball_scores?.map((bs, i) => ({
+  const wagonShots = (scoring?.ball_scores || []).map(bs => ({
     ...bs,
-    contact_x: analytics?.batsman?.contact_map?.[i]?.x,
-    contact_y: analytics?.batsman?.contact_map?.[i]?.y,
-  })) || [];
+    contact_x: bs.contact_x != null ? bs.contact_x : null,
+    contact_y: bs.contact_y != null ? bs.contact_y : null,
+  })).concat(analytics?.batsman?.contact_map || []);
 
   return (
     <View style={{ flex: 1, backgroundColor: '#f0f4f0' }}>
@@ -95,14 +93,13 @@ export default function AnalyticsScreen() {
           contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#1a472a" />}
         >
-          {/* Summary */}
           <View style={styles.summaryCard}>
-            <Text style={styles.summaryTitle}>{analytics.session.session_name}</Text>
+            <Text style={styles.summaryTitle}>{analytics?.session?.session_name || 'Net Session'}</Text>
             <Text style={styles.summaryText}>
-              🏏 {analytics.session.bowler_name}
+              🏏 {analytics?.session?.bowler_name || 'Bowler'}
               {bowlerHandedness === 'left' ? ' (LH)' : ' (RH)'}
               {'  →  '}
-              🏏 {analytics.session.batsman_name}
+              | 🏏 {analytics?.session?.batsman_name || 'Batter'}
               {batterHandedness === 'left' ? ' (LH)' : ' (RH)'}
             </Text>
             <View style={styles.summaryStats}>
@@ -123,9 +120,14 @@ export default function AnalyticsScreen() {
                 </>
               )}
             </View>
+            <TouchableOpacity
+              style={styles.pdfBtn}
+              onPress={() => generateNetsPDF(activeSession, analytics, scoring)}
+            >
+              <Text style={styles.pdfBtnText}>📄 Generate PDF Report</Text>
+            </TouchableOpacity>
           </View>
 
-          {/* Scoring */}
           {scoring && (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>📊 Scoring Summary</Text>
@@ -144,7 +146,6 @@ export default function AnalyticsScreen() {
             </View>
           )}
 
-          {/* Wagon wheel */}
           <View style={styles.card}>
             <Text style={styles.cardTitle}>🎡 Wagon Wheel</Text>
             <View style={{ alignItems: 'center', marginTop: 8 }}>
@@ -156,7 +157,6 @@ export default function AnalyticsScreen() {
             </View>
           </View>
 
-          {/* Length */}
           {b && Object.keys(b.length_distribution).length > 0 && (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>🏏 Length Distribution</Text>
@@ -166,7 +166,6 @@ export default function AnalyticsScreen() {
             </View>
           )}
 
-          {/* Line */}
           {b && Object.keys(b.line_distribution).length > 0 && (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>🏏 Line Distribution</Text>
@@ -176,7 +175,6 @@ export default function AnalyticsScreen() {
             </View>
           )}
 
-          {/* Movement */}
           {b && (b.avg_swing_degree || b.avg_turn_degree) && (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>🏏 Movement Averages</Text>
@@ -187,7 +185,6 @@ export default function AnalyticsScreen() {
             </View>
           )}
 
-          {/* Pitch map */}
           {b && b.pitch_map.length > 0 && (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>🗺️ Pitch Map</Text>
@@ -202,7 +199,6 @@ export default function AnalyticsScreen() {
             </View>
           )}
 
-          {/* Contact quality */}
           {bat && (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>🏏 Contact Quality</Text>
@@ -226,7 +222,6 @@ export default function AnalyticsScreen() {
             </View>
           )}
 
-          {/* Shot selection */}
           {bat && Object.keys(bat.shot_distribution).length > 0 && (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>🏏 Shot Selection</Text>
@@ -236,7 +231,6 @@ export default function AnalyticsScreen() {
             </View>
           )}
 
-          {/* Extras */}
           {bat && (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>⚠️ Extras</Text>
@@ -245,10 +239,9 @@ export default function AnalyticsScreen() {
             </View>
           )}
 
-          {/* Ball-by-ball tracker link - Added per instructions */}
           <TouchableOpacity 
             style={styles.trackerBtn} 
-            onPress={() => router.push('/balltracker')}
+            onPress={() => router.push('/(nets)/balltracker')}
           >
             <Text style={styles.trackerBtnText}>📋 View Full Ball-by-Ball Tracker →</Text>
           </TouchableOpacity>
@@ -278,6 +271,8 @@ const styles = StyleSheet.create({
   summaryStatBox: { alignItems: 'center' },
   summaryBig: { color: '#fff', fontSize: 30, fontWeight: 'bold' },
   summaryStatLabel: { color: '#a5d6a7', fontSize: 11, marginTop: 2 },
+  pdfBtn: { backgroundColor: '#f0c040', paddingHorizontal: 18, paddingVertical: 9, borderRadius: 20, marginTop: 14, alignItems: 'center' },
+  pdfBtnText: { color: '#1a472a', fontWeight: 'bold', fontSize: 13 },
   card: { backgroundColor: '#fff', borderRadius: 12, padding: 16, marginBottom: 12, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
   cardTitle: { fontSize: 15, fontWeight: 'bold', color: '#1a472a', marginBottom: 10 },
   scoringRow: { flexDirection: 'row', justifyContent: 'space-around' },
@@ -294,6 +289,6 @@ const styles = StyleSheet.create({
   triBox: { flex: 1, alignItems: 'center', padding: 8, backgroundColor: '#f8fff8', borderRadius: 8, marginHorizontal: 3 },
   triNum: { fontSize: 22, fontWeight: 'bold', color: '#1a472a' },
   triLabel: { fontSize: 11, color: '#666', marginTop: 2 },
-  trackerBtn: { backgroundColor: '#1a472a', padding: 14, borderRadius: 12, alignItems: 'center', marginTop: 8, marginBottom: 8 }, // Added per instructions
-  trackerBtnText: { color: '#f0c040', fontWeight: 'bold', fontSize: 15 }, // Added per instructions
+  trackerBtn: { backgroundColor: '#1a472a', padding: 14, borderRadius: 12, alignItems: 'center', marginTop: 8, marginBottom: 8 },
+  trackerBtnText: { color: '#f0c040', fontWeight: 'bold', fontSize: 15 },
 });
